@@ -1,4 +1,6 @@
 #include <IOKit/IOKitLib.h>
+
+#include <cassert>
 #include <iostream>
 
 //
@@ -36,7 +38,7 @@ std::pair<bool, int> hw_carry_gpu()
     // typedef const void * CFTypeRef;
     CFTypeRef class_code_ref = IORegistryEntryCreateCFProperty(io_svc /*entry=*/, CFSTR("class-code") /*key=*/,
         kCFAllocatorDefault /*allocator=*/, 0 /*options=*/);
-    if (class_code_ref != nullptr)
+    if (class_code_ref != NULL)
     {
       auto class_code_data = static_cast<CFDataRef>(class_code_ref);
       // typedef long CFIndex;
@@ -49,6 +51,7 @@ std::pair<bool, int> hw_carry_gpu()
       }
 
       const UInt8 *raw_bytes = CFDataGetBytePtr(class_code_data);
+      assert(sizeof(raw_bytes) >= 4);
       UInt32 class_code = (raw_bytes[3] << 24) | (raw_bytes[2] << 16) |
         (raw_bytes[1] << 8) | raw_bytes[0];
 
@@ -58,11 +61,10 @@ std::pair<bool, int> hw_carry_gpu()
       {
         found = true;
         gpu_quan++;
-        CFRelease(class_code_ref);
-        IOObjectRelease(io_svc /*object=*/);
       }
     }
     CFRelease(class_code_ref);
+    IOObjectRelease(io_svc /*object=*/);
   }
   IOObjectRelease(io_iter /*object=*/);
 
@@ -71,6 +73,8 @@ std::pair<bool, int> hw_carry_gpu()
 
 int main()
 {
+  const char *_Y = "YES";
+  const char *_N = "NO";
   auto ans = hw_carry_gpu();
-  std::cout << '(' << ans.first << ", " << ans.second << ')' << "\n";
+  println("INFO: { Existing:", ans.first ? _Y : _N, ", GPU Quan:", ans.second, "}");
 }
