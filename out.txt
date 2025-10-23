@@ -1,0 +1,10 @@
+INFO: Kernel's return-code: 0 0
+Reporter:
+  + Name: 
+
+Reporter:
+  + Name: IGPU
+  + Model: Intel Iris Plus Graphics 645
+  + Vendor: Intel
+  + Device ID: 3ea6
+
