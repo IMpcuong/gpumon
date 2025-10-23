@@ -47,29 +47,40 @@ struct gpu_spec
 
 const char *_PCI_DEV = "IOPCIDevice";
 
-const UInt8 *hw_get_qualified_byte_ptr(io_service_t &entry, CFTypeRef &ref, const int &min_sz)
+const UInt8 *hw_get_qualified_byte_ptr(io_service_t &entry, CFTypeRef &ref,
+    const int &min_sz, const bool &need_type_check = false)
 {
-  const UInt8 *raw_bytes = nullptr;
-  if (min_sz == -1)
+  const UInt8 *raw_bytes;
+  CFDataRef ref_data;
+  if (need_type_check)
   {
     // typedef unsigned long CFTypeID;
     CFTypeID ref_id = CFGetTypeID(ref);
     if (ref_id == CFDataGetTypeID())
     {
-      auto ref_data = static_cast<CFDataRef>(ref);
-      raw_bytes = CFDataGetBytePtr(ref_data);
+      ref_data = static_cast<CFDataRef>(ref);
+    }
+    else
+    {
+      CFRelease(ref);
+      IOObjectRelease(entry);
       return raw_bytes;
     }
   }
 
-  auto ref_data = static_cast<CFDataRef>(ref);
-  // typedef long CFIndex;
-  CFIndex ref_data_sz = CFDataGetLength(ref_data);
-  if (ref_data_sz < min_sz)
+  if (min_sz > -1)
   {
-    CFRelease(ref_data);
-    IOObjectRelease(entry);
-    return raw_bytes;
+    if (!need_type_check)
+      ref_data = static_cast<CFDataRef>(ref);
+
+    // typedef long CFIndex;
+    CFIndex ref_data_sz = CFDataGetLength(ref_data);
+    if (ref_data_sz < min_sz)
+    {
+      CFRelease(ref_data);
+      IOObjectRelease(entry);
+      return raw_bytes;
+    }
   }
 
   raw_bytes = CFDataGetBytePtr(ref_data);
@@ -122,7 +133,7 @@ std::vector<gpu_spec> hw_retrieve_gpu_specs()
               kCFAllocatorDefault, 0);
           if (model_ref)
           {
-            auto *raw_bytes = hw_get_qualified_byte_ptr(io_svc_entry, model_ref, -1 /*min_sz=*/);
+            auto *raw_bytes = hw_get_qualified_byte_ptr(io_svc_entry, model_ref, -1, true /*need_type_check=*/);
             spec.model = static_cast<std::string>((const char *)raw_bytes);
 
             CFRelease(model_ref);
