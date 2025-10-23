@@ -192,5 +192,6 @@ std::vector<gpu_spec> hw_retrieve_gpu_specs()
 int main()
 {
   auto gpu_specs = hw_retrieve_gpu_specs();
+  println("INFO: GPU Quantity =", GPU_QUAN);
   std::ranges::for_each(gpu_specs, [](const auto &spec) { std::cout << spec << "\n"; });
 }

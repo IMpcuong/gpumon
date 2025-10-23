@@ -1,4 +1,5 @@
 INFO: Kernel's return-code: 0 0
+INFO: GPU Quantity = 1
 Reporter:
   + Name: 
 
