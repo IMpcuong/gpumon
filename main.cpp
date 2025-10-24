@@ -87,6 +87,14 @@ hw_get_qualified_byte_ptr(io_service_t &entry, CFTypeRef &ref,
   return {raw_bytes, true};
 }
 
+// #include <AvailabilityMacros.h> := older API
+// #include <Availability.h>       := newer API
+#if MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_VERSION_12_0
+  #define IO_MAIN_PORT kIOMainPortDefault
+#else
+  #define IO_MAIN_PORT kIOMasterPortDefault
+#endif
+
 const char *_PCI_DEV = "IOPCIDevice";
 
 int GPU_QUAN = 0;
@@ -97,7 +105,7 @@ const std::vector<gpu_spec> hw_collect_gpu_specs()
 
   CFMutableDictionaryRef matching_dyn_dict_ref = IOServiceMatching(_PCI_DEV /*name=*/);
   io_iterator_t io_iter;
-  kern_return_t kern_rc = IOServiceGetMatchingServices(kIOMainPortDefault /*mainPort=*/,
+  kern_return_t kern_rc = IOServiceGetMatchingServices(IO_MAIN_PORT /*mainPort=*/,
       matching_dyn_dict_ref /*matching=*/, &io_iter /*existing=*/);
   println("INFO: Kernel's return-code:", kern_rc, KERN_SUCCESS);
   if (kern_rc != KERN_SUCCESS)
