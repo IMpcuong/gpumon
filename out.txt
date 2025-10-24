@@ -1,9 +1,6 @@
 INFO: Kernel's return-code: 0 0
 INFO: GPU Quantity = 1
 Reporter:
-  + Name: 
-
-Reporter:
   + Name: IGPU
   + Model: Intel Iris Plus Graphics 645
   + Vendor: Intel

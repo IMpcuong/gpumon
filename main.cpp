@@ -27,7 +27,7 @@ struct gpu_spec
   std::optional<std::string> model;
   std::optional<std::string> vendor;
   std::optional<std::string> dev_id;
-  std::optional<int> vram;
+  std::optional<UInt64> vram;
 
   friend std::ostream &operator<<(std::ostream &out, const gpu_spec &spec)
   {
@@ -45,9 +45,8 @@ struct gpu_spec
   }
 };
 
-const char *_PCI_DEV = "IOPCIDevice";
-
-const UInt8 *hw_get_qualified_byte_ptr(io_service_t &entry, CFTypeRef &ref,
+std::pair<const UInt8 *, bool>
+hw_get_qualified_byte_ptr(io_service_t &entry, CFTypeRef &ref,
     const int &min_sz, const bool &need_type_check = false)
 {
   const UInt8 *raw_bytes;
@@ -64,7 +63,7 @@ const UInt8 *hw_get_qualified_byte_ptr(io_service_t &entry, CFTypeRef &ref,
     {
       CFRelease(ref);
       IOObjectRelease(entry);
-      return raw_bytes;
+      return {raw_bytes, false};
     }
   }
 
@@ -79,13 +78,15 @@ const UInt8 *hw_get_qualified_byte_ptr(io_service_t &entry, CFTypeRef &ref,
     {
       CFRelease(ref_data);
       IOObjectRelease(entry);
-      return raw_bytes;
+      return {raw_bytes, false};
     }
   }
 
   raw_bytes = CFDataGetBytePtr(ref_data);
-  return raw_bytes;
+  return {raw_bytes, true};
 }
+
+const char *_PCI_DEV = "IOPCIDevice";
 
 int GPU_QUAN = 0;
 
@@ -93,10 +94,10 @@ std::vector<gpu_spec> hw_retrieve_gpu_specs()
 {
   std::vector<gpu_spec> specs;
 
-  CFMutableDictionaryRef matching_dyn_dict = IOServiceMatching(_PCI_DEV /*name=*/);
+  CFMutableDictionaryRef matching_dyn_dict_ref = IOServiceMatching(_PCI_DEV /*name=*/);
   io_iterator_t io_iter;
   kern_return_t kern_rc = IOServiceGetMatchingServices(kIOMainPortDefault /*mainPort=*/,
-      matching_dyn_dict /*matching=*/, &io_iter /*existing=*/);
+      matching_dyn_dict_ref /*matching=*/, &io_iter /*existing=*/);
   println("INFO: Kernel's return-code:", kern_rc, KERN_SUCCESS);
   if (kern_rc != KERN_SUCCESS)
     return specs;
@@ -110,10 +111,22 @@ std::vector<gpu_spec> hw_retrieve_gpu_specs()
         kCFAllocatorDefault /*allocator=*/, 0 /*options=*/);
     if (class_code_ref != NULL)
     {
-      auto *raw_bytes = hw_get_qualified_byte_ptr(io_svc_entry, class_code_ref, 4 /*min_sz=*/);
+      auto data_state = hw_get_qualified_byte_ptr(io_svc_entry, class_code_ref, 4 /*min_sz=*/);
+      const UInt8 *raw_bytes = data_state.first;
+      bool allocated = data_state.second;
+      if (!allocated)
+      {
+        CFRelease(class_code_ref);
+        IOObjectRelease(io_svc_entry);
+        continue;
+      }
+
       UInt32 class_code = (raw_bytes[3] << 24) | (raw_bytes[2] << 16) |
         (raw_bytes[1] << 8) | raw_bytes[0];
 
+      // 0x010000 := mass storage controller's preserved address
+      // 0x020000 := network controller's preserved address
+      // 0x0C0000 := serial bus (USB, FireWire, etc) controller's preserved address
       // 0x030000 := display controller's preserved address
       // class_code & 0xFF0000 := extracts 8 high-bits
       if ((class_code & 0xFF0000) == 0x030000)
@@ -133,8 +146,11 @@ std::vector<gpu_spec> hw_retrieve_gpu_specs()
               kCFAllocatorDefault, 0);
           if (model_ref)
           {
-            auto *raw_bytes = hw_get_qualified_byte_ptr(io_svc_entry, model_ref, -1, true /*need_type_check=*/);
-            spec.model = static_cast<std::string>((const char *)raw_bytes);
+            auto data_state = hw_get_qualified_byte_ptr(io_svc_entry, model_ref, -1, true /*need_type_check=*/);
+            const UInt8 *raw_bytes = data_state.first;
+            bool allocated = data_state.second;
+            if (allocated)
+              spec.model = static_cast<std::string>((const char *)raw_bytes);
 
             CFRelease(model_ref);
           }
@@ -145,14 +161,19 @@ std::vector<gpu_spec> hw_retrieve_gpu_specs()
               kCFAllocatorDefault, 0);
           if (vendor_id_ref)
           {
-            auto *raw_bytes = hw_get_qualified_byte_ptr(io_svc_entry, vendor_id_ref, 2 /*min_sz=*/);
-            UInt32 vendor_id = raw_bytes[0] | (raw_bytes[1] << 8);
-            switch (vendor_id)
+            auto data_state = hw_get_qualified_byte_ptr(io_svc_entry, vendor_id_ref, 2 /*min_sz=*/);
+            const UInt8 *raw_bytes = data_state.first;
+            bool allocated = data_state.second;
+            if (allocated)
             {
-              case 0x1002: spec.vendor = "AMD"; break;
-              case 0x10de: spec.vendor = "Nvidia"; break;
-              case 0x8086: spec.vendor = "Intel"; break;
-              case 0x106b: spec.vendor = "Apple"; break;
+              UInt32 vendor_id = raw_bytes[0] | (raw_bytes[1] << 8);
+              switch (vendor_id)
+              {
+                case 0x1002: spec.vendor = "AMD"; break;
+                case 0x10de: spec.vendor = "Nvidia"; break;
+                case 0x8086: spec.vendor = "Intel"; break;
+                case 0x106b: spec.vendor = "Apple"; break;
+              }
             }
 
             CFRelease(vendor_id_ref);
@@ -164,20 +185,45 @@ std::vector<gpu_spec> hw_retrieve_gpu_specs()
               kCFAllocatorDefault, 0);
           if (dev_id_ref)
           {
-            auto *raw_bytes = hw_get_qualified_byte_ptr(io_svc_entry, dev_id_ref, 2 /*min_sz=*/);
-            UInt32 device_id = raw_bytes[0] | (raw_bytes[1] << 8);
-            std::stringstream ss;
-            ss << std::hex << device_id;
-            spec.dev_id = ss.str();
+            auto data_state = hw_get_qualified_byte_ptr(io_svc_entry, dev_id_ref, 2 /*min_sz=*/);
+            const UInt8 *raw_bytes = data_state.first;
+            bool allocated = data_state.second;
+            if (allocated)
+            {
+              UInt32 device_id = raw_bytes[0] | (raw_bytes[1] << 8);
+              std::stringstream ss;
+              ss << std::hex << device_id;
+              spec.dev_id = ss.str();
+            }
 
             CFRelease(dev_id_ref);
           }
         }
 
         { // VRAM Size
+          CFTypeRef vram_ref = IORegistryEntryCreateCFProperty(io_svc_entry, CFSTR("VRAM,totalsize"),
+              kCFAllocatorDefault, 0);
+          if (vram_ref)
+          {
+            auto data_state = hw_get_qualified_byte_ptr(io_svc_entry, vram_ref,
+                2 /*min_sz=*/, true /*need_type_check=*/);
+            const UInt8 *raw_bytes = data_state.first;
+            bool allocated = data_state.second;
+            if (allocated)
+            {
+              UInt64 vram_sz = 0;
+              const int max_seg_quan = 8;
+              const int cur_seg_quan = static_cast<int>(CFDataGetLength((CFDataRef)vram_ref));
+              for (int i = 0; i < cur_seg_quan && i < max_seg_quan; i++)
+                vram_sz |= static_cast<UInt64>(raw_bytes[i]) << (i * 8);
+
+              spec.vram = vram_sz / (1024 * 1024);
+            }
+
+            CFRelease(vram_ref);
+          }
         }
 
-        specs.resize(GPU_QUAN);
         specs.emplace_back(spec);
       }
     }
