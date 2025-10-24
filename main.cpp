@@ -1,4 +1,5 @@
 #include <IOKit/IOKitLib.h>
+#include <sys/sysctl.h>
 
 #include <cassert>
 #include <iostream>
@@ -90,7 +91,7 @@ const char *_PCI_DEV = "IOPCIDevice";
 
 int GPU_QUAN = 0;
 
-std::vector<gpu_spec> hw_retrieve_gpu_specs()
+const std::vector<gpu_spec> hw_collect_gpu_specs()
 {
   std::vector<gpu_spec> specs;
 
@@ -235,9 +236,64 @@ std::vector<gpu_spec> hw_retrieve_gpu_specs()
   return specs;
 }
 
+struct cpu_spec
+{
+  std::string name;
+  std::string arch;
+  int family;
+  int physical_cores = 0;
+  int logical_cores = 0;
+  // std::array<int, 4> caches; // hw.l1dcachesize, hw.l1icachesize, hw.l2cachesize, hw.l3cachesize
+
+  friend std::ostream &operator<<(std::ostream &out, const cpu_spec &spec)
+  {
+    out << "Reporter:\n";
+    out << "  + Name: " << spec.name << "\n";
+    out << "  + Architecture: " << spec.arch << "\n";
+    out << "  + Family: " << spec.family << "\n";
+    out << "  + Physical cores: " << spec.physical_cores << "\n";
+    out << "  + Logical cores: " << spec.logical_cores << "\n";
+    return out;
+  }
+};
+
+const cpu_spec *hw_collect_cpu_spec()
+{
+  cpu_spec *spec = new cpu_spec();
+
+  const char *name_query = "machdep.cpu.brand_string";
+  size_t len = 0;
+  sysctlbyname(name_query, NULL, &len, NULL, 0);
+  spec->name.resize(len);
+  sysctlbyname(name_query, spec->name.data(), &len, NULL, 0);
+
+  const char *arch_query = "hw.machine";
+  sysctlbyname(arch_query, NULL, &len, NULL, 0);
+  spec->arch.resize(len);
+  sysctlbyname(arch_query, spec->arch.data(), &len, NULL, 0);
+
+  const char *family_query = "hw.cpufamily";
+  len = sizeof(spec->family);
+  sysctlbyname(family_query, &spec->family, &len, NULL, 0);
+
+  const char *pcore_query = "hw.physicalcpu";
+  len = sizeof(spec->physical_cores);
+  sysctlbyname(pcore_query, &spec->physical_cores, &len, NULL, 0);
+
+  const char *lcore_query = "hw.logicalcpu";
+  len = sizeof(spec->logical_cores);
+  sysctlbyname(lcore_query, &spec->logical_cores, &len, NULL, 0);
+
+  return spec;
+}
+
 int main()
 {
-  auto gpu_specs = hw_retrieve_gpu_specs();
   println("INFO: GPU Quantity =", GPU_QUAN);
+  auto gpu_specs = hw_collect_gpu_specs();
   std::ranges::for_each(gpu_specs, [](const auto &spec) { std::cout << spec << "\n"; });
+
+  println("INFO: CPU");
+  auto cpu_spec = *hw_collect_cpu_spec();
+  std::cout << cpu_spec << "\n";
 }
