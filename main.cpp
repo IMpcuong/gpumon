@@ -1,3 +1,4 @@
+#include <CoreFoundation/CoreFoundation.h>
 #include <IOKit/IOKitLib.h>
 #include <sys/sysctl.h>
 
@@ -11,8 +12,10 @@
 
 //
 // @Note(impcuong): Abbrev-list
-//  + CF := Core Foundation
-//  + hw := hardware
+//  + CF  := Core Foundation
+//  + hw  := hardware
+//  + dev := device
+//  + txt := texture
 //
 
 template <typename... Args>
@@ -142,7 +145,7 @@ const std::vector<gpu_spec> hw_collect_gpu_specs()
       {
         GPU_QUAN++;
         gpu_spec spec;
-        memset(&spec, 0, sizeof(spec));
+        memset(&spec, 0, sizeof(gpu_spec));
 
         { // Name
           io_name_t io_name;
@@ -244,6 +247,132 @@ const std::vector<gpu_spec> hw_collect_gpu_specs()
   return specs;
 }
 
+using ll = long long;
+
+struct gpu_stat
+{
+  std::optional<long> vram;
+  std::optional<int> txt_quan;
+  std::optional<int> dev_usage;
+  std::optional<double> core_usage;
+  std::optional<ll> vram_free;
+
+  friend std::ostream &operator<<(std::ostream &out, const gpu_stat &stat)
+  {
+    out << "Reporter:\n";
+    if (stat.txt_quan.has_value())
+      out << "  + Textures: " << stat.txt_quan.value() << "\n";
+    if (stat.vram.has_value())
+      out << "  + VRAM (MB): " << stat.vram.value() << "\n";
+    if (stat.vram_free.has_value())
+      out << "  + VRAM Free (B): " << stat.vram_free.value() << "\n";
+    if (stat.dev_usage.has_value())
+      out << "  + Device usage (%): " << stat.dev_usage.value() << "\n";
+    if (stat.core_usage.has_value())
+      out << "  + Core usage (%): " << stat.core_usage.value() << "\n";
+    return out;
+  }
+};
+
+const char *_IO_ACCEL = "IOAccelerator";
+
+const std::vector<gpu_stat> hw_collect_gpu_stats()
+{
+  std::vector<gpu_stat> stats;
+
+  CFMutableDictionaryRef io_accel_ref = IOServiceMatching(_IO_ACCEL /*name=*/);
+  io_iterator_t io_iter;
+  kern_return_t kern_rc = IOServiceGetMatchingServices(IO_MAIN_PORT /*mainPort=*/,
+      io_accel_ref /*matching=*/, &io_iter /*existing=*/);
+  println("INFO: Kernel's return-code:", kern_rc, KERN_SUCCESS);
+  if (kern_rc != KERN_SUCCESS)
+    return stats;
+
+  // typedef io_object_t io_service_t;
+  io_service_t io_svc_entry; // uint32_t
+  while ((io_svc_entry = IOIteratorNext(io_iter)))
+  {
+    CFMutableDictionaryRef io_accel_prop_ref = nullptr;
+    // @Note: `ioreg -l -w 0 | grep -i "ioaccelerator"
+    kern_rc = IORegistryEntryCreateCFProperties(io_svc_entry /*entry=*/, &io_accel_prop_ref /*properties=*/,
+        kCFAllocatorDefault /*allocator=*/, 0 /*options=*/);
+    println("INFO: Kernel's return-code:", kern_rc, KERN_SUCCESS);
+    if (kern_rc != KERN_SUCCESS)
+      return stats;
+
+    if (io_accel_prop_ref != nullptr)
+    {
+      gpu_stat stat;
+      memset(&stat, 0, sizeof(gpu_stat));
+
+      const void *raw_vram_sz = CFDictionaryGetValue(io_accel_prop_ref, CFSTR("VRAM,totalMB"));
+      if (raw_vram_sz != nullptr)
+      {
+        auto gpu_vram_sz = static_cast<CFNumberRef>(raw_vram_sz);
+        long vram = 0;
+        CFNumberGetValue(gpu_vram_sz, kCFNumberIntType, &vram);
+        stat.vram.emplace(vram);
+      }
+
+      // @Note: `ioreg -l -w 0 | grep -i "performance" -A 30`
+      const void *raw_perf_stat = CFDictionaryGetValue(io_accel_prop_ref /*theDict=*/, CFSTR("PerformanceStatistics") /*key=*/);
+      auto gpu_perf_stat = static_cast<CFDictionaryRef>(raw_perf_stat);
+      if (gpu_perf_stat)
+      {
+        int usage = 0;
+
+        const void *raw_txt_quan = CFDictionaryGetValue(gpu_perf_stat, CFSTR("textureCount"));
+        if (raw_txt_quan != nullptr)
+        {
+          auto gpu_util_percentage = static_cast<CFNumberRef>(raw_txt_quan);
+          CFNumberGetValue(gpu_util_percentage, kCFNumberIntType, &usage);
+          stat.txt_quan.emplace(usage);
+        }
+
+        const void *raw_util_percentage = CFDictionaryGetValue(gpu_perf_stat, CFSTR("Device Utilization % at cur p-state"));
+        if (raw_util_percentage != nullptr)
+        {
+          auto gpu_util_percentage = static_cast<CFNumberRef>(raw_util_percentage);
+          CFNumberGetValue(gpu_util_percentage, kCFNumberIntType, &usage);
+          stat.dev_usage.emplace(usage);
+        }
+
+        const void *raw_core_percentage= CFDictionaryGetValue(gpu_perf_stat, CFSTR("GPU Core Utilization"));
+        if (raw_core_percentage != nullptr)
+        {
+          auto gpu_core_percentage = static_cast<CFNumberRef>(raw_core_percentage);
+          CFNumberGetValue(gpu_core_percentage, kCFNumberDoubleType, &usage);
+          stat.core_usage.emplace(usage);
+        }
+      }
+
+      // @Fixme: Wrong implementation...
+      const void *raw_entries_stat = CFDictionaryGetValue(io_accel_prop_ref /*theDict=*/, CFSTR("IOCompatibilityProperties") /*key=*/);
+      auto gpu_entries_stat = static_cast<CFDictionaryRef>(raw_perf_stat);
+      if (gpu_entries_stat)
+      {
+        const void *raw_vram_free = CFDictionaryGetValue(gpu_perf_stat, CFSTR("PerformanceStatistics.vramFreeBytes"));
+        if (raw_vram_free != nullptr)
+        {
+          auto gpu_vram_free = static_cast<CFNumberRef>(raw_vram_free);
+          long vram_free = 0;
+          CFNumberGetValue(gpu_vram_free, kCFNumberIntType, &vram_free);
+          stat.vram_free.emplace(vram_free);
+        }
+      }
+      // End @Fixme
+
+      stats.emplace_back(stat);
+
+      CFRelease(io_accel_prop_ref);
+    }
+    IOObjectRelease(io_svc_entry /*object=*/);
+  }
+  IOObjectRelease(io_iter /*object=*/);
+
+  return stats;
+}
+
 struct cpu_spec
 {
   std::string name;
@@ -265,7 +394,7 @@ struct cpu_spec
   }
 };
 
-const cpu_spec *hw_collect_cpu_spec()
+const cpu_spec * hw_collect_cpu_spec()
 {
   cpu_spec *spec = new cpu_spec();
 
@@ -297,11 +426,15 @@ const cpu_spec *hw_collect_cpu_spec()
 
 int main()
 {
+  println("INFO: CPU");
+  auto cpu_spec = *hw_collect_cpu_spec();
+  std::cout << cpu_spec << "\n";
+
   println("INFO: GPU Quantity =", GPU_QUAN);
   auto gpu_specs = hw_collect_gpu_specs();
   std::ranges::for_each(gpu_specs, [](const auto &spec) { std::cout << spec << "\n"; });
 
-  println("INFO: CPU");
-  auto cpu_spec = *hw_collect_cpu_spec();
-  std::cout << cpu_spec << "\n";
+  println("INFO: GPU Stat");
+  auto gpu_stats = hw_collect_gpu_stats();
+  std::ranges::for_each(gpu_stats, [](const auto &stat) { std::cout << stat << "\n"; });
 }
