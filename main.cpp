@@ -136,12 +136,17 @@ const std::vector<gpu_spec> hw_collect_gpu_specs()
       UInt32 class_code = (raw_bytes[3] << 24) | (raw_bytes[2] << 16) |
         (raw_bytes[1] << 8) | raw_bytes[0];
 
-      // 0x010000 := mass storage controller's preserved address
-      // 0x020000 := network controller's preserved address
-      // 0x0C0000 := serial bus (USB, FireWire, etc) controller's preserved address
-      // 0x030000 := display controller's preserved address
-      // class_code & 0xFF0000 := extracts 8 high-bits
-      if ((class_code & 0xFF0000) == 0x030000)
+      //
+      // @Note(impcuong):
+      //  0x010000 := mass storage controller's preserved address
+      //  0x020000 := network controller's preserved address
+      //  0x0C0000 := serial bus (USB, FireWire, etc) controller's preserved address
+      //  0x030000 := display controller's preserved address
+      //  0x060000 := PCIe preverved address (https://en.wikipedia.org/wiki/PCI_Express)
+      //  class_code & 0xFF0000 := extracts 8 high-bits
+      //
+      class_code &= 0xFF0000;
+      if (class_code == 0x030000 || class_code == 0x020000 || class_code == 0x060000)
       {
         GPU_QUAN++;
         gpu_spec spec;
